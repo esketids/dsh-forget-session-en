@@ -1,120 +1,139 @@
-# dsh-forget-session
+# dsh-forget-session-en
 
-DeepSeek Harness（DSH）插件：在会话行「…」菜单里加一个**「遗忘会话」**，
-把该会话从侧栏与磁盘上彻底移除。灵枢记忆插件的沉淀数据不受影响。
-桌面端与 Web 端通用（插件 UI 运行在两端同源的浏览器渲染层，行为一致）。
+**English fork of [dsh-forget-session](https://github.com/2026heshao/dsh-forget-session) by [2026heshao](https://github.com/2026heshao).** This fork translates the UI text, code comments, documentation, and error messages to English, and uses its own package, plugin-row, service, and slot IDs so it can be installed alongside the original instead of colliding with it. The behavior is otherwise identical to upstream v2.2.1.
 
-> **兼容性**：已在 DeepSeek Harness 44.7.0（宿主内置 `@deepseek-ai/dsh-typert-protocol@0.2.1-rc.2` / cordis 4.0.5）上全量测试通过；声明的 peer 范围 `>=0.1.5-rc.1` 继续覆盖，本版本无需代码改动。
+See [docs/verification-checklist.md](docs/verification-checklist.md) for the verification and troubleshooting checklist.
 
-## 功能
+A DeepSeek Harness (DSH) plugin that adds a **"Forget session"** item to the session row's "…" menu and removes that session completely from the sidebar and from disk. Data accumulated by the Lingxu memory plugin is not affected. It works on both the desktop and web builds (the plugin UI runs in the same browser rendering layer in both, so behavior is identical).
 
-仅在**会话行「…」菜单**新增一项：
+> **Compatibility**: fully tested on DeepSeek Harness 44.7.0 (host bundles `@deepseek-ai/dsh-typert-protocol@0.2.1-rc.2` / cordis 4.0.5); the declared peer range `>=0.1.5-rc.1` still covers it, and this version needs no code changes.
 
-- **「遗忘会话」**（order 500，排在官方「置顶 / 重命名 / 分支 / 归档」之后）
-- 点击后**两段式确认**：该行变成「再次点击确认遗忘」，再点一次才执行
-  （菜单内完成，不弹窗；失败信息直接显示在这一行上，不静默）
-- 成功后该行消失，顶部 Toast 汇报删除摘要（删了几个工件、几条警告）
+## Features
 
-| 删除对象 | 方式 |
+Adds exactly one item, in the **session row "…" menu**:
+
+- **"Forget session"** (order 500, placed after the official "Pin / Rename / Branch / Archive" items)
+- **Two-step confirmation** after clicking: the row becomes "Click again to confirm", and only the next click executes
+  (everything happens inside the menu, with no dialog; failures are shown directly on this row, never silently)
+- On success the row disappears and a top Toast reports the deletion summary (how many artifacts were deleted, how many warnings)
+
+| Deleted object | Method |
 | --- | --- |
-| 正在运行的工作 | 官方 `workspace/session-stop` 瀑布（stopActivity 归档路径） |
-| **活体会话（Session store 内）** | 官方 `entry.detach()` 内部通道：`store.delete` + `attachments.delete` + `emitDisposed`（v2.2 新增，见下文根因 3） |
-| 工作区记账（workspace.json 的 sessionIds） | 官方 `detachSession` 通道（domain 写链） |
-| 归档集合 / 置顶集合 | 官方 `unarchiveSession` / `unpinSession` |
-| 会话日志目录 `~/.dsh/sessions/<项目键>/<id>` | 整目录删除（含 `_no-cwd`、历史无前缀布局、占用重试） |
-| 投影缓存分片 `~/.dsh/storages/session_projcache/sessions/<id>.json` | 删除 |
-| 投影缓存总表 `~/.dsh/storages/session_projcache.json` 的表项 | 读-改-写，其余内容原样保留 |
-| 复活文件（句柄残留 / 迟到写入重建） | Host「复活守卫」在 ~2 分钟窗口内自动再删 |
-| 侧栏会话行（客户端会话列表） | 官方 `sessions.handleSessionRemoved(id)` + `sessions.refresh()` |
+| Running work | Official `workspace/session-stop` waterfall (stopActivity archive path) |
+| **Live session (inside the Session store)** | Official `entry.detach()` internal channel: `store.delete` + `attachments.delete` + `emitDisposed` (new in v2.2; see root cause 3 below) |
+| Workspace accounting (`sessionIds` in workspace.json) | Official `detachSession` channel (domain write chain) |
+| Archive set / pinned set | Official `unarchiveSession` / `unpinSession` |
+| Session log directory `~/.dsh/sessions/<project key>/<id>` | Whole-directory delete (including `_no-cwd`, legacy unprefixed layouts, and in-use retries) |
+| Projection cache shard `~/.dsh/storages/session_projcache/sessions/<id>.json` | Delete |
+| Table entry in the projection cache `~/.dsh/storages/session_projcache.json` | Read-modify-write; everything else is preserved as-is |
+| Resurrected files (leftover handles / recreated by late writes) | The Host "resurrection guard" deletes them again automatically within a ~2-minute window |
+| Sidebar session row (client session list) | Official `sessions.handleSessionRemoved(id)` + `sessions.refresh()` |
 
-**不动的数据**：灵枢记忆（`~/.dsh/.dsh-memory`）、附件、其他任何会话。
+**Data left untouched**: Lingxu memory (`~/.dsh/.dsh-memory`), attachments, and any other session.
 
-## 修复了什么（为什么已删会话还会回到「未分组」）
+## What was fixed (why deleted sessions returned to "Ungrouped")
 
-「未分组」= 客户端会话列表里的 id − 所有 `workspace.sessionIds` 的并集。
-对官方源码逐包取证后确认了两个复活路径：
+"Ungrouped" = ids in the client session list − the union of all `workspace.sessionIds`.
+After gathering evidence package by package from the official source, three resurrection paths were confirmed:
 
-| 根因 | 机制 | 对策 |
+| Root cause | Mechanism | Countermeasure |
 | --- | --- | --- |
-| **Windows 活体删除竞态** | 会话打开过就有 write handle / 跨进程 lease：`rm` 目录报 EBUSY/EPERM，v1 静默失败 → 文件残留 → 重启后 registry 重新收编；且删除后活体 teardown 的迟到 append 会**重建已删目录** | 删除后**验证性复查**，占用类错误退避重试；布置**复活守卫**：2s 起指数退避（封顶 32s）、总窗 ~130s 周期复查，目录被重建立即再删 |
-| **客户端列表复活** | Host 的 `session.list` 仍会列出活体会话；客户端任何一次 `refreshList`（重连即触发）都会把已删行合并回来 | 删除后调用官方 `sessions.refresh()` 重拉基线，让复活行在可见前被再次摘掉 |
-| **活体从未摘除（v2.2 根治）** | `SessionStore` 没有公开的 remove API：会话一旦进入 store，`session.list`（合并活体 + 持久化）永远列出它 —— 删除后**立刻**回到「未分组」；且持久层 writer 握着 write handle 顶住磁盘，`rm` EBUSY，复活守卫删 ~130s 也是白删 | 走每个 store entry 自带的官方 `entry.detach()`（= `store.delete` + `attachments.delete` + `emitDisposed`）：既让行从 `session.list` 消失（官方 `api-session/removed` 帧），又释放持久层 write handle —— 删盘这一步才真正删得动 |
+| **Windows live-deletion race** | Once a session has been opened there is a write handle / cross-process lease: `rm` on the directory reports EBUSY/EPERM, v1 failed silently → files remained → the registry re-adopted them after a restart; and a late append from the live teardown after deletion could **recreate the deleted directory** | **Verification re-check** after deletion, with backoff retries for in-use errors; set up a **resurrection guard**: exponential backoff starting at 2s (capped at 32s) and periodic re-checks for a total window of ~130s, immediately deleting any recreated directory |
+| **Client list resurrection** | The Host's `session.list` still lists live sessions; any client `refreshList` (triggered on reconnect) merges the deleted rows back | After deletion, call the official `sessions.refresh()` to reload the baseline, so the resurrected row is removed again before it becomes visible |
+| **Live entry never detached (root-fixed in v2.2)** | `SessionStore` has no public remove API: once a session enters the store, `session.list` (which merges live + persisted sessions) always lists it — after deletion it **immediately** returns to "Ungrouped"; and the persistence writer holds a write handle that keeps the disk busy, so `rm` gets EBUSY and even the resurrection guard deleting for ~130s is wasted | Use the official `entry.detach()` carried by every store entry (= `store.delete` + `attachments.delete` + `emitDisposed`): this both removes the row from `session.list` (official `api-session/removed` frame) and releases the persistence write handle — only then does the disk deletion actually work |
 
-> v2 一度还加过「会话体检 / 空壳清扫 / audit 盘点」等额外远端点，但它们并未
-> 随客户端契约挂载，点了只会得到 `typert gateway` 错误，属于无用面 —— 已全部
-> 移除，契约面只保留 `delete` 一个方法。
+> v2 once also added extra remote endpoints such as "session health check / empty-shell sweep / audit inventory", but they were never mounted with the client contract; clicking them only produced a `typert gateway` error, making them a useless surface — they have all been removed, and the contract surface keeps only the single `delete` method.
 
-## 远端契约
+## Remote contract
 
-`forgetSession` 服务只暴露一个方法：
+The `forgetSessionEn` service exposes only one method:
 
-| 方法 | 参数 | 行为 |
+| Method | Parameters | Behavior |
 | --- | --- | --- |
-| `delete` | `{ sessionId }` | 全瀑布删除（权威状态 + 磁盘工件 + 复活守卫） |
+| `delete` | `{ sessionId }` | Full waterfall deletion (authoritative state + disk artifacts + resurrection guard) |
 
-## 安装
+## Installation
 
-用 DSH 官方命令安装（装进哪个 profile，就在哪个端生效）：
+Install from npm with the official DSH command (whichever profile you install into is where it takes effect):
 
 ```sh
-dsh plugin --profile web add github:2026heshao/dsh-forget-session
+dsh plugin --profile web add dsh-forget-session-en
 ```
 
-装完**重启 DSH** 即生效（`--profile` 后换成你实际使用的 profile 名）。
-
-## 卸载
+Or install directly from the repository:
 
 ```sh
-dsh plugin --profile web remove dsh-forget-session
+dsh plugin --profile web add github:esketids/dsh-forget-session-en
 ```
 
-`remove` 会同时移除依赖与补丁层，重启 DSH 后菜单恢复原状。
+**Restart DSH** after installation for it to take effect (replace the value after `--profile` with the profile name you actually use).
 
-## 工作原理（给维护者）
+## Uninstall
 
-- **Host 半**（`lib/index.js`）：`TypertRemoteService`，服务名 `forgetSession`，
-  `inject: ["workspaceRegistry"]`。`delete()` 走官方状态通道
-  （stop / unarchive / unpin / **活体 detach** / detach），再按
-  `session-persistence-jsonl` 的同构路径算法（`projectKey` + `encodeSegment`）
-  删除磁盘工件（占用类错误退避重试 + 验证性复查），清投影缓存，最后布置
-  复活守卫。全程不手改 `workspace.json` —— 记账由 registry 的官方 mutate
-  写链完成。活体摘除经 `ctx.get("sessions").store`（公开类字段 Map）取
-  entry 调 `entry.detach()`，等价于官方 `SessionStore.detachEntered`。
-- **浏览器半**（`lib/client.js`）：`window.__ModuleLoader__` 包，
-  `ctx.remote.$mount` 只挂 `delete` 一个方法契约（strict codec 两键并写），
-  `ctx.slots.inject("sidebar.workspaces.session.menu.item", ...)` 注册菜单行；
-  Toast 走 `primitives.Toast`，经模块级 toast bus + `shell.overlay` 常驻组件
-  渲染（**React hook 绝不能在 `apply()` 里调用** —— 渲染上下文之外没有
-  dispatcher，会让整个 fiber FAILED）。
-- **复活守卫**：`delete()` 成功后启动（无论本轮是否全清）；每档复查日志目录
-  （cwd 已知按项目键定位，未知全扫）与分片缓存，删除再次成功会连带清分片。
-  同一会话再次显式删除会重置守卫。
+```sh
+dsh plugin --profile web remove dsh-forget-session-en
+```
 
-## 测试
+`remove` also removes the dependency and the patch layer; after restarting DSH the menu returns to its original state.
+
+## How it works (for maintainers)
+
+- **Host half** (`lib/index.js`): a `TypertRemoteService` named `forgetSessionEn` with
+  `inject: ["workspaceRegistry"]`. `delete()` goes through the official state channels
+  (stop / unarchive / unpin / **live detach** / detach), then deletes disk artifacts
+  using the same path algorithm as `session-persistence-jsonl` (`projectKey` +
+  `encodeSegment`) (retrying in-use errors with backoff + verification re-check),
+  cleans the projection cache, and finally sets up the resurrection guard. It never
+  edits `workspace.json` by hand — accounting is done through the registry's official
+  mutate write chain. Live removal obtains the entry via
+  `ctx.get("sessions").store` (a public class field Map) and calls `entry.detach()`,
+  which is equivalent to the official `SessionStore.detachEntered`.
+- **Browser half** (`lib/client.js`): a `window.__ModuleLoader__` bundle;
+  `ctx.remote.$mount` mounts a contract with only the single `delete` method
+  (strict codec writes both keys); `ctx.slots.inject("sidebar.workspaces.session.menu.item", ...)`
+  registers the menu row. Toasts use `primitives.Toast`, rendered through a
+  module-level toast bus + a resident `shell.overlay` component (**React hooks must
+  never be called inside `apply()`** — there is no dispatcher outside a render
+  context, which makes the whole fiber FAILED).
+- **Resurrection guard**: started after a successful `delete()` (whether or not this
+  pass removed everything); each step re-checks the log directory (located by
+  project key when cwd is known, otherwise a full scan) and the shard cache, and a
+  successful deletion also clears the shard. An explicit delete of the same session
+  resets the guard.
+
+## Tests
 
 ```powershell
-cd <本仓库目录>
+cd <this repository directory>
 node test/verify.mjs
 ```
 
-隔离 HOME（`DSH_FORGET_SESSION_HOME` 指向临时目录），15 项断言覆盖：
-契约面只含 `delete`、delete 全瀑布（活体 flush/detach、目录/分片/总表项/
-工作区 detach）、正常会话零误伤、幂等、缺参报错、复活守卫清除被重建目录。
+With an isolated HOME (`DSH_FORGET_SESSION_HOME` points at a temporary directory),
+15 assertions cover: the contract surface contains only `delete`, the full `delete`
+waterfall (live flush/detach, directory/shard/table entry/workspace detach), zero
+collateral damage to normal sessions, idempotency, missing-argument errors, and the
+resurrection guard deleting a recreated directory.
 
-> 测试需要 `@deepseek-ai/cordis` 与 `@deepseek-ai/dsh-typert-protocol`
-> （peer 依赖，随 DSH 提供），在装了本插件的 profile 内可直接运行。
+> The test needs `@deepseek-ai/cordis` and `@deepseek-ai/dsh-typert-protocol`
+> (peer dependencies, supplied by DSH) and can be run directly inside a profile
+> where this plugin is installed.
 
-## 已知边界
+## Known limitations
 
-- DSH 官方设计是「会话只归档不删除」（见 dsh-client-ui-workspace README），
-  本插件是官方通道之外的用户级补充；
-- 若被删会话是本进程活体：先 `flush` 落盘缓冲事件，再经 `entry.detach()`
-  摘出 store（官方 dispose 通道会关持久层 write handle）。守卫窗口（~130s）
-  内 teardown 的迟到写入都会被补删。建议在空闲会话上使用删除；
-- 会话搜索索引（`session-query-sqlite`）的 `openAt` 非 `never` 时，已删会话行
-  会在下次 `_reconcile`（任何一次搜索）自动收敛 —— 持久化列表已不含该 id，
-  索引走 `persistentDeletes` 清掉它；`openAt: never`（默认）为内存态，自愈。
+- The official DSH design is "archive sessions, never delete them" (see the
+  dsh-client-ui-workspace README); this plugin is a user-level addition beyond the
+  official channels.
+- If the deleted session is live in this process: buffered events are first
+  `flush`ed to disk, then the session is detached from the store via
+  `entry.detach()` (the official dispose channel closes the persistence write
+  handle). Late writes from the teardown within the guard window (~130s) are
+  deleted afterwards. Deleting idle sessions is recommended.
+- For the session search index (`session-query-sqlite`), when `openAt` is not
+  `never`, deleted session rows converge automatically on the next `_reconcile`
+  (any search) — the persisted list no longer contains the id, and the index clears
+  it through `persistentDeletes`; `openAt: never` (the default) is in-memory and
+  self-heals.
 
-## 许可
+## License
 
 MIT

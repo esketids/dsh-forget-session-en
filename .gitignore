@@ -1,3 +1,5 @@
 node_modules/
 lib/*.map
 publish.log
+*.tgz
+.DS_Store

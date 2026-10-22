@@ -1,5 +1,7 @@
-# 让 Loader 以独立插件行装载本包（与官方 dsh-web-app patch 的行同构）。
-# 不改任何官方行：只插入一行，卸载即恢复。
+# Let the Loader mount this package as its own plugin row (same shape as the
+# rows in the official dsh-web-app patch).
+# No official row is modified: we only insert one row, so uninstalling restores
+# everything.
 - insert:
-    - id: forget-session
-      name: dsh-forget-session
+    - id: forget-session-en
+      name: dsh-forget-session-en

@@ -1,7 +1,7 @@
 {
-  "name": "dsh-forget-session",
+  "name": "dsh-forget-session-en",
   "version": "2.2.1",
-  "description": "DeepSeek Harness 插件：在会话行「…」菜单加入「遗忘会话」，两段式确认后把会话从侧栏与磁盘（会话日志、投影缓存、工作区记账、归档/置顶集合）彻底移除；v2.2 起先从 Session store 摘除活体（官方 detach 通道），根治「遗忘后立即回到未分组/磁盘删不动」。灵枢记忆不受影响。",
+  "description": "English fork of dsh-forget-session. DeepSeek Harness plugin: adds a \"Forget session\" item to the session row's \"…\" menu. After a two-step confirmation it removes the session from the sidebar and from disk (session logs, projection cache, workspace accounting, archived/pinned sets). Since v2.2 it first detaches the live entry from the Session store (official detach channel), which fixes both \"the session returns to Ungrouped right after forgetting\" and \"the files cannot be deleted\". Memory data is not affected.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -46,16 +46,19 @@
     "forget",
     "session",
     "session-cleanup",
-    "sidebar"
+    "sidebar",
+    "english",
+    "translation",
+    "fork"
   ],
-  "author": "2026heshao",
+  "author": "esketids (fork of 2026heshao)",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/2026heshao/dsh-forget-session.git"
+    "url": "git+https://github.com/esketids/dsh-forget-session-en.git"
   },
-  "homepage": "https://github.com/2026heshao/dsh-forget-session#readme",
+  "homepage": "https://github.com/esketids/dsh-forget-session-en#readme",
   "bugs": {
-    "url": "https://github.com/2026heshao/dsh-forget-session/issues"
+    "url": "https://github.com/esketids/dsh-forget-session-en/issues"
   },
   "license": "MIT"
 }

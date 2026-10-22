@@ -1,9 +1,13 @@
 /**
- * dsh-forget-session v2.1 验证（隔离 HOME，不碰真实 ~/.dsh）。
+ * dsh-forget-session-en v2.1 verification (isolated HOME; never touches the real
+ * ~/.dsh).
  *
- * 契约面只剩 `delete` 一个远端方法（体检/清扫等额外方法已按要求移除）。
- * 覆盖：delete 全瀑布（目录/分片/总表项/detach）、幂等、复活守卫（被重建的
- * 目录会被自动再删）、正常会话零误伤、缺参报错。
+ * The contract surface has only one remote method, `delete` (extra methods such
+ * as health-check/sweep have been removed as requested).
+ * Covers: the full delete waterfall (directory/shard/table entry/detach),
+ * idempotency, the resurrection guard (a recreated directory is deleted again
+ * automatically), zero collateral damage to normal sessions, and an error for a
+ * missing argument.
  */
 import { join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from "node:fs";
@@ -18,7 +22,7 @@ const root = join(home, ".dsh", "sessions");
 const projDir = join(root, "--D-proj--");
 mkdirSync(projDir, { recursive: true });
 
-// ── 夹具 ──────────────────────────────────────────────────────────────
+// ── Fixtures ──────────────────────────────────────────────────────────
 const victimId = "session-victim";
 const victimDir = join(projDir, victimId);
 const header = JSON.stringify({ type: "session", version: 4, id: victimId, createdAt: 2, cwd: "D:\\proj", isSeeded: false, delegationDepth: 0 });
@@ -27,13 +31,13 @@ writeFileSync(join(victimDir, "session.v4.jsonl.zstd"), zlib.zstdCompressSync(
 	Buffer.from(header + "\n" + JSON.stringify({ type: "user/message", seq: 1 }) + "\n", "utf8")
 ));
 
-// 旁证：一个正常会话（绝不能被误删）
+// Control: a normal session (must never be deleted by mistake)
 const otherId = "session-other";
 const otherDir = join(projDir, otherId);
 mkdirSync(otherDir);
 writeFileSync(join(otherDir, "session.v4.jsonl"), JSON.stringify({ type: "session", version: 4, id: otherId, createdAt: 1, cwd: "D:\\proj", isSeeded: false, delegationDepth: 0 }) + "\n" + JSON.stringify({ type: "user/message", seq: 1 }) + "\n");
 
-// 投影缓存：分片 + 总表项
+// Projection cache: shard + table entry
 mkdirSync(join(home, ".dsh", "storages", "session_projcache", "sessions"), { recursive: true });
 writeFileSync(join(home, ".dsh", "storages", "session_projcache", "sessions", `${victimId}.json`), "{}");
 writeFileSync(join(home, ".dsh", "storages", "session_projcache.json"), JSON.stringify({
@@ -41,7 +45,7 @@ writeFileSync(join(home, ".dsh", "storages", "session_projcache.json"), JSON.str
 	tables: { sessions: { [victimId]: { keep: true }, [otherId]: { keep: true } } }
 }, null, 1));
 
-// ── 假 registry + 假 sessions 服务 + 真 Cordis Context ────────────────
+// ── Fake registry + fake sessions service + real Cordis Context ───────
 const detached = [];
 const registry = {
 	readSessionHeader: async (id) => ({ id, cwd: id === victimId ? "D:\\proj" : undefined }),
@@ -50,8 +54,9 @@ const registry = {
 	archivedSessionIds: [], pinnedSessionIds: []
 };
 
-// 活体侧：victim 在 Session store 里存活（detach 会把它从 store 摘掉，
-// 忠实模拟官方 detachEntered：store.delete + attachments.delete + emitDisposed）
+// Live side: victim is alive in the Session store (detach removes it from the
+// store; faithfully simulates the official detachEntered: store.delete +
+// attachments.delete + emitDisposed)
 const liveDetachCalls = [];
 const liveFlushCalls = [];
 const sessionsService = {
@@ -73,12 +78,12 @@ const gateway = new mod.default(ctx, undefined);
 const results = [];
 const check = (name, cond) => { results.push([name, !!cond]); console.log(`${cond ? "PASS" : "FAIL"}  ${name}`); };
 
-// 1) 契约面只剩 delete（体检/清扫相关方法必须不存在）
+// 1) The contract surface has only delete (health-check/sweep methods must not exist)
 check("surface.onlyDelete", typeof gateway.delete === "function"
 	&& gateway.verify === undefined && gateway.sweepShells === undefined
 	&& gateway.audit === undefined && gateway.preview === undefined);
 
-// 2) delete 全瀑布
+// 2) Full delete waterfall
 const del = await gateway.delete({ sessionId: victimId });
 check("delete.ok", del.ok === true);
 check("delete.dirGone", !existsSync(victimDir));
@@ -91,14 +96,14 @@ check("delete.liveDetached", del.removed?.detachedLive === true && liveDetachCal
 check("delete.liveFlushed", del.removed?.flushed === true && liveFlushCalls.length > 0);
 check("delete.guardScheduled", del.removed?.guardScheduled === true);
 
-// 3) 零误伤
+// 3) Zero collateral damage
 check("other.intact", existsSync(otherDir));
 
-// 4) 幂等
+// 4) Idempotency
 const del2 = await gateway.delete({ sessionId: victimId });
 check("delete.idempotent", del2.ok === true);
 
-// 5) 复活守卫：删后立刻重建目录，守卫应在 ~2s 档把它清掉
+// 5) Resurrection guard: recreate the directory right after deletion; the guard should remove it at the ~2s step
 mkdirSync(victimDir, { recursive: true });
 writeFileSync(join(victimDir, "session.v4.jsonl"), "{}\n");
 check("guard.recreated", existsSync(victimDir));
@@ -106,7 +111,7 @@ await new Promise((resolve) => setTimeout(resolve, 5000));
 check("guard.resurrectedRemoved", !existsSync(victimDir));
 gateway.stopGuard(victimId);
 
-// 6) 缺参报错
+// 6) Missing-argument error
 let threw = false;
 try { await gateway.delete({}); } catch { threw = true; }
 check("delete.requiresSessionId", threw);
